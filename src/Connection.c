@@ -256,6 +256,28 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
         goto Cleanup;
     }
 
+    // Replace missing callbacks with placeholders
+    fixupMissingCallbacks(&drCallbacks, &arCallbacks, &clCallbacks);
+    memcpy(&VideoCallbacks, drCallbacks, sizeof(VideoCallbacks));
+    memcpy(&AudioCallbacks, arCallbacks, sizeof(AudioCallbacks));
+
+#ifdef LC_DEBUG_RECORD_MODE
+    // Install the pass-through recorder callbacks
+    setRecorderCallbacks(&VideoCallbacks, &AudioCallbacks);
+#endif
+
+    // Hook the termination callback so we can avoid issuing a termination callback
+    // after LiStopConnection() is called.
+    //
+    // Initialize ListenerCallbacks before anything that could call Limelog().
+    originalTerminationCallback = clCallbacks->connectionTerminated;
+    memcpy(&ListenerCallbacks, clCallbacks, sizeof(ListenerCallbacks));
+    ListenerCallbacks.connectionTerminated = ClInternalConnectionTerminated;
+
+    memset(&LocalAddr, 0, sizeof(LocalAddr));
+    NegotiatedVideoFormat = 0;
+    memcpy(&StreamConfig, streamConfig, sizeof(StreamConfig));
+
     // Normalize the video stream list so everything downstream can just read
     // videoStreams[], whether the caller asked for one stream or several.
     if (StreamConfig.videoStreamCount <= 1) {
@@ -279,27 +301,6 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     }
     VideoStreamCount = StreamConfig.videoStreamCount;
 
-    // Replace missing callbacks with placeholders
-    fixupMissingCallbacks(&drCallbacks, &arCallbacks, &clCallbacks);
-    memcpy(&VideoCallbacks, drCallbacks, sizeof(VideoCallbacks));
-    memcpy(&AudioCallbacks, arCallbacks, sizeof(AudioCallbacks));
-
-#ifdef LC_DEBUG_RECORD_MODE
-    // Install the pass-through recorder callbacks
-    setRecorderCallbacks(&VideoCallbacks, &AudioCallbacks);
-#endif
-
-    // Hook the termination callback so we can avoid issuing a termination callback
-    // after LiStopConnection() is called.
-    //
-    // Initialize ListenerCallbacks before anything that could call Limelog().
-    originalTerminationCallback = clCallbacks->connectionTerminated;
-    memcpy(&ListenerCallbacks, clCallbacks, sizeof(ListenerCallbacks));
-    ListenerCallbacks.connectionTerminated = ClInternalConnectionTerminated;
-
-    memset(&LocalAddr, 0, sizeof(LocalAddr));
-    NegotiatedVideoFormat = 0;
-    memcpy(&StreamConfig, streamConfig, sizeof(StreamConfig));
     RemoteAddrString = strdup(serverInfo->address);
 
     // The values in RTSP SETUP will be used to populate these.
