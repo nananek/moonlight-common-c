@@ -622,6 +622,11 @@ int LiSendMouseMoveEvent(short deltaX, short deltaY);
 // referenceWidth and referenceHeight to your window width and height.
 int LiSendMousePositionEvent(short x, short y, short referenceWidth, short referenceHeight);
 
+// Like LiSendMousePositionEvent(), but names which of the host's displays the reference
+// rectangle belongs to. Use this when several streams are on screen at once; the plain
+// call above is this one with streamIndex 0.
+int LiSendMousePositionEventForStream(int streamIndex, short x, short y, short referenceWidth, short referenceHeight);
+
 // This function queues a mouse position update event to be sent to the remote server, so
 // all of the limitations of LiSendMousePositionEvent() mentioned above apply here too!
 //

@@ -51,7 +51,10 @@ typedef struct _NV_ABS_MOUSE_MOVE_PACKET {
     short x;
     short y;
 
-    short unused;
+    // Which of the host's video streams these coordinates belong to. Zero on every
+    // client that predates multi-display, which is the stream that has always been
+    // meant, so the field stays compatible with what used to sit here unused.
+    short streamIndex;
 
     // Used on the server-side as a reference to scale x and y
     // to screen coordinates.
