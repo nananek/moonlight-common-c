@@ -256,6 +256,29 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
         goto Cleanup;
     }
 
+    // Normalize the video stream list so everything downstream can just read
+    // videoStreams[], whether the caller asked for one stream or several.
+    if (StreamConfig.videoStreamCount <= 1) {
+        StreamConfig.videoStreamCount = 1;
+        StreamConfig.videoStreams[0].width = StreamConfig.width;
+        StreamConfig.videoStreams[0].height = StreamConfig.height;
+        StreamConfig.videoStreams[0].fps = StreamConfig.fps;
+    }
+    else if (StreamConfig.videoStreamCount > MAX_VIDEO_STREAMS) {
+        Limelog("Requested %d video streams, but at most %d are supported\n",
+                StreamConfig.videoStreamCount, MAX_VIDEO_STREAMS);
+        err = -1;
+        goto Cleanup;
+    }
+    else {
+        // The single-stream fields describe the first stream, which is what the
+        // session-wide parts of the SDP are built from.
+        StreamConfig.width = StreamConfig.videoStreams[0].width;
+        StreamConfig.height = StreamConfig.videoStreams[0].height;
+        StreamConfig.fps = StreamConfig.videoStreams[0].fps;
+    }
+    VideoStreamCount = StreamConfig.videoStreamCount;
+
     // Replace missing callbacks with placeholders
     fixupMissingCallbacks(&drCallbacks, &arCallbacks, &clCallbacks);
     memcpy(&VideoCallbacks, drCallbacks, sizeof(VideoCallbacks));

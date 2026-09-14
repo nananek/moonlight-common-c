@@ -174,6 +174,69 @@ static int addStreamOptions(PSDP_OPTION* head) {
     return err;
 }
 
+// Emit the attributes that describe one video stream. Stream 0's are written inline by
+// getAttributesList() along with the session-wide ones; this fills in the rest so that a
+// multi-display session describes every display it asked for.
+static int addVideoStreamAttributes(PSDP_OPTION* head, int index, int adjustedBitrate) {
+    char name[64];
+    char payloadStr[92];
+    unsigned char slicesPerFrame;
+    int err = 0;
+
+#define ADD_STREAM_ATTR(group, field, value) \
+    snprintf(name, sizeof(name), "%s[%d].%s", (group), index, (field)); \
+    err |= addAttributeString(head, name, (value))
+
+    snprintf(payloadStr, sizeof(payloadStr), "%d", StreamConfig.videoStreams[index].width);
+    ADD_STREAM_ATTR("x-nv-video", "clientViewportWd", payloadStr);
+    snprintf(payloadStr, sizeof(payloadStr), "%d", StreamConfig.videoStreams[index].height);
+    ADD_STREAM_ATTR("x-nv-video", "clientViewportHt", payloadStr);
+    snprintf(payloadStr, sizeof(payloadStr), "%d", StreamConfig.videoStreams[index].fps);
+    ADD_STREAM_ATTR("x-nv-video", "maxFPS", payloadStr);
+
+    snprintf(payloadStr, sizeof(payloadStr), "%d", adjustedBitrate);
+    ADD_STREAM_ATTR("x-nv-video", "initialBitrateKbps", payloadStr);
+    ADD_STREAM_ATTR("x-nv-video", "initialPeakBitrateKbps", payloadStr);
+    ADD_STREAM_ATTR("x-nv-vqos", "bw.minimumBitrateKbps", payloadStr);
+    ADD_STREAM_ATTR("x-nv-vqos", "bw.maximumBitrateKbps", payloadStr);
+
+    // Codec selection is a property of this client, so it matches stream 0.
+    slicesPerFrame = (unsigned char)(VideoCallbacks.capabilities >> 24);
+    if (slicesPerFrame == 0) {
+        slicesPerFrame = 1;
+    }
+    snprintf(payloadStr, sizeof(payloadStr), "%d", slicesPerFrame);
+    ADD_STREAM_ATTR("x-nv-video", "videoEncoderSlicesPerFrame", payloadStr);
+
+    if (NegotiatedVideoFormat & VIDEO_FORMAT_MASK_AV1) {
+        ADD_STREAM_ATTR("x-nv-vqos", "bitStreamFormat", "2");
+    }
+    else if (NegotiatedVideoFormat & VIDEO_FORMAT_MASK_H265) {
+        ADD_STREAM_ATTR("x-nv-vqos", "bitStreamFormat", "1");
+    }
+    else {
+        ADD_STREAM_ATTR("x-nv-vqos", "bitStreamFormat", "0");
+    }
+
+    ADD_STREAM_ATTR("x-nv-video", "dynamicRangeMode",
+                    (NegotiatedVideoFormat & VIDEO_FORMAT_MASK_10BIT) ? "1" : "0");
+    ADD_STREAM_ATTR("x-ss-video", "chromaSamplingType",
+                    (NegotiatedVideoFormat & VIDEO_FORMAT_MASK_YUV444) ? "1" : "0");
+    ADD_STREAM_ATTR("x-nv-video", "maxNumReferenceFrames",
+                    isReferenceFrameInvalidationSupportedByDecoder() ? "0" : "1");
+
+    snprintf(payloadStr, sizeof(payloadStr), "%d",
+             (StreamConfig.colorSpace << 1) | StreamConfig.colorRange);
+    ADD_STREAM_ATTR("x-nv-video", "encoderCscMode", payloadStr);
+
+    snprintf(payloadStr, sizeof(payloadStr), "%d", StreamConfig.clientRefreshRateX100);
+    ADD_STREAM_ATTR("x-nv-video", "clientRefreshRateX100", payloadStr);
+
+#undef ADD_STREAM_ATTR
+
+    return err;
+}
+
 static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
     PSDP_OPTION optionHead;
     char payloadStr[92];
@@ -409,6 +472,22 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
 
     snprintf(payloadStr, sizeof(payloadStr), "%d", (StreamConfig.colorSpace << 1) | StreamConfig.colorRange);
     err |= addAttributeString(&optionHead, "x-nv-video[0].encoderCscMode", payloadStr);
+
+    // Ask for one stream per host display, and name the display each one captures.
+    snprintf(payloadStr, sizeof(payloadStr), "%d", StreamConfig.videoStreamCount);
+    err |= addAttributeString(&optionHead, "x-ss-general.videoStreamCount", payloadStr);
+
+    for (int i = 0; i < StreamConfig.videoStreamCount; i++) {
+        char name[64];
+
+        snprintf(name, sizeof(name), "x-ss-video[%d].outputName", i);
+        err |= addAttributeString(&optionHead, name, StreamConfig.videoStreams[i].hostDisplayName);
+
+        // Stream 0's attributes were written inline above, along with the session-wide ones.
+        if (i > 0) {
+            err |= addVideoStreamAttributes(&optionHead, i, adjustedBitrate);
+        }
+    }
 
     if (err == 0) {
         return optionHead;

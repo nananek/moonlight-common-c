@@ -1048,13 +1048,13 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
         if (!setupStream(&response,
                          "streamid=video/0/0",
                          &error)) {
-            Limelog("RTSP SETUP streamid=video request failed: %d\n", error);
+            Limelog("RTSP SETUP streamid=video/0 request failed: %d\n", error);
             ret = error;
             goto Exit;
         }
 
         if (response.message.response.statusCode != 200) {
-            Limelog("RTSP SETUP streamid=video request failed: %d\n",
+            Limelog("RTSP SETUP streamid=video/0 request failed: %d\n",
                 response.message.response.statusCode);
             ret = response.message.response.statusCode;
             goto Exit;
@@ -1077,6 +1077,32 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
         }
         else {
             Limelog("Video port: %u\n", VideoPortNumber);
+        }
+
+        freeMessage(&response);
+    }
+
+    // The remaining streams share the port above -- the index in each packet's RTP
+    // extension separates them -- but each is still set up explicitly so the host can
+    // reject one it never agreed to.
+    for (int i = 1; i < StreamConfig.videoStreamCount; i++) {
+        RTSP_MESSAGE response;
+        int error = -1;
+        char target[32];
+
+        snprintf(target, sizeof(target), "streamid=video/%d/0", i);
+
+        if (!setupStream(&response, target, &error)) {
+            Limelog("RTSP SETUP %s request failed: %d\n", target, error);
+            ret = error;
+            goto Exit;
+        }
+
+        if (response.message.response.statusCode != 200) {
+            Limelog("RTSP SETUP %s failed: %d\n",
+                target, response.message.response.statusCode);
+            ret = response.message.response.statusCode;
+            goto Exit;
         }
 
         freeMessage(&response);

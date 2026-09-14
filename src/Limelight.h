@@ -44,6 +44,24 @@ const char* LiGetLaunchUrlQueryParameters(void);
 // Maximum number of simultaneous video streams (one per host display).
 #define MAX_VIDEO_STREAMS 4
 
+// Longest host display name we will carry, matching the Name field in /serverinfo.
+#define MAX_HOST_DISPLAY_NAME_LEN 64
+
+// One video stream's configuration. A multi-display session fills one of these per
+// host display it wants; see videoStreamCount in STREAM_CONFIGURATION below.
+typedef struct _STREAM_VIDEO_CONFIG {
+    // Dimensions in pixels of this stream's video
+    int width;
+    int height;
+
+    // FPS of this stream's video
+    int fps;
+
+    // Host display to capture, as reported in the Name field of /serverinfo.
+    // Leave empty to let the host pick its configured default display.
+    char hostDisplayName[MAX_HOST_DISPLAY_NAME_LEN];
+} STREAM_VIDEO_CONFIG, *PSTREAM_VIDEO_CONFIG;
+
 typedef struct _STREAM_CONFIGURATION {
     // Dimensions in pixels of the desired video stream
     int width;
@@ -103,6 +121,14 @@ typedef struct _STREAM_CONFIGURATION {
     // in /launch and /resume requests.
     char remoteInputAesKey[16];
     char remoteInputAesIv[16];
+
+    // Number of video streams to request, at most MAX_VIDEO_STREAMS. Leave at 0 (or 1)
+    // for a single stream described by the width/height/fps fields above; those fields
+    // are then copied into videoStreams[0] for you. Set it higher to receive one stream
+    // per host display, in which case videoStreams[] must describe every stream and the
+    // width/height/fps above are taken from videoStreams[0].
+    int videoStreamCount;
+    STREAM_VIDEO_CONFIG videoStreams[MAX_VIDEO_STREAMS];
 } STREAM_CONFIGURATION, *PSTREAM_CONFIGURATION;
 
 // Use this function to zero the stream configuration when allocated on the stack or heap
