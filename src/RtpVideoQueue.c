@@ -355,7 +355,12 @@ cleanup_packets:
 
                 int dataOffset = sizeof(*rtpPacket);
                 if (rtpPacket->header & FLAG_EXTENSION) {
-                    dataOffset += 4; // 2 additional fields
+                    // FEC parity covers the payload, not the RTP header, so the extension
+                    // on a recovered packet is whatever the parity math produced. This queue
+                    // only ever holds one stream's packets, so stamp the index back on.
+                    PNV_VIDEO_RTP_EXTENSION extension = (PNV_VIDEO_RTP_EXTENSION)(rtpPacket + 1);
+                    extension->streamIndex = (uint8_t)queue->streamIndex;
+                    dataOffset += sizeof(NV_VIDEO_RTP_EXTENSION);
                 }
 
                 PNV_VIDEO_PACKET nvPacket = (PNV_VIDEO_PACKET)(((char*)rtpPacket) + dataOffset);

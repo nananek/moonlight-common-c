@@ -1151,7 +1151,7 @@ void queueRtpPacket(int streamIndex, PRTPV_QUEUE_ENTRY queueEntryPtr) {
 
     dataOffset = sizeof(*queueEntry.packet);
     if (queueEntry.packet->header & FLAG_EXTENSION) {
-        dataOffset += 4; // 2 additional fields
+        dataOffset += sizeof(NV_VIDEO_RTP_EXTENSION);
     }
 
     // The packet length was validated by the RtpVideoQueue

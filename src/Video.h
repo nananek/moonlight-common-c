@@ -39,6 +39,15 @@ typedef struct _NV_VIDEO_PACKET {
 #define FIXED_RTP_HEADER_SIZE 12
 #define MAX_RTP_HEADER_SIZE 16
 
+// The 4-byte RTP extension that follows the RTP header on every video packet, signalled
+// by FLAG_EXTENSION. The host has always sent it and GFE left the bytes unused, so this
+// fork claims the first one for the index of the video stream the packet belongs to.
+// That is what lets a multi-display session multiplex every stream onto one UDP port.
+typedef struct _NV_VIDEO_RTP_EXTENSION {
+    uint8_t streamIndex;
+    uint8_t reserved[3];
+} NV_VIDEO_RTP_EXTENSION, *PNV_VIDEO_RTP_EXTENSION;
+
 typedef struct _RTP_PACKET {
     uint8_t header;
     uint8_t packetType;

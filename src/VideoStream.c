@@ -123,9 +123,6 @@ static void VideoReceiveThreadProc(void* context) {
     int waitingForVideoMs;
     bool encrypted;
 
-    // TODO(multi-display): route by the stream index in the packet header once it exists
-    PVIDEO_STREAM_CONTEXT stream = &VideoStreams[0];
-
     encrypted = !!(EncryptionFeaturesEnabled & SS_ENC_VIDEO);
     decryptedSize = StreamConfig.packetSize + MAX_RTP_HEADER_SIZE;
     minSize = sizeof(RTP_PACKET) + ((EncryptionFeaturesEnabled & SS_ENC_VIDEO) ? sizeof(ENC_VIDEO_HEADER) : 0);
@@ -240,7 +237,7 @@ static void VideoReceiveThreadProc(void* context) {
             // couldn't already do. If they're not on-link, we just throw their malicious
             // traffic away (as mentioned in the paragraph above) and continue accepting
             // legitmate video traffic.
-            if (encHeader->frameNumber && LE32(encHeader->frameNumber) < RtpvGetCurrentFrameNumber(&stream->rtpQueue)) {
+            if (encHeader->frameNumber && LE32(encHeader->frameNumber) < RtpvGetCurrentFrameNumber(&VideoStreams[0].rtpQueue)) {
                 continue;
             }
 
@@ -260,6 +257,22 @@ static void VideoReceiveThreadProc(void* context) {
         packet->sequenceNumber = BE16(packet->sequenceNumber);
         packet->timestamp = BE32(packet->timestamp);
         packet->ssrc = BE32(packet->ssrc);
+
+        // Every stream shares this socket, so the RTP extension says which one this is.
+        PVIDEO_STREAM_CONTEXT stream = &VideoStreams[0];
+        if (packet->header & FLAG_EXTENSION) {
+            if (err < (int)(sizeof(RTP_PACKET) + sizeof(NV_VIDEO_RTP_EXTENSION))) {
+                continue;
+            }
+
+            PNV_VIDEO_RTP_EXTENSION extension = (PNV_VIDEO_RTP_EXTENSION)(packet + 1);
+            if (extension->streamIndex >= VideoStreamCount) {
+                // A host that sends more streams than we asked for, or a corrupt packet.
+                continue;
+            }
+
+            stream = &VideoStreams[extension->streamIndex];
+        }
 
         queueStatus = RtpvAddPacket(&stream->rtpQueue, packet, err, (PRTPV_QUEUE_ENTRY)&buffer[decryptedSize]);
 
