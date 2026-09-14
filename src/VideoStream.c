@@ -2,7 +2,20 @@
 
 #define FIRST_FRAME_TIMEOUT_SEC 10
 
-static RTP_VIDEO_QUEUE rtpQueue;
+// Per-stream receive state. One of these exists per host display; the UDP
+// socket, receive thread and ping thread below are shared by all of them
+// because every stream is multiplexed onto the same port.
+typedef struct _VIDEO_STREAM_CONTEXT {
+    int streamIndex;
+    RTP_VIDEO_QUEUE rtpQueue;
+    PLT_THREAD decoderThread;
+    bool receivedFullFrame;
+} VIDEO_STREAM_CONTEXT, *PVIDEO_STREAM_CONTEXT;
+
+static VIDEO_STREAM_CONTEXT VideoStreams[MAX_VIDEO_STREAMS];
+
+// Until the protocol negotiates the stream count, there is exactly one.
+int VideoStreamCount = 1;
 
 static SOCKET rtpSocket = INVALID_SOCKET;
 
@@ -10,11 +23,9 @@ static PPLT_CRYPTO_CONTEXT decryptionCtx;
 
 static PLT_THREAD udpPingThread;
 static PLT_THREAD receiveThread;
-static PLT_THREAD decoderThread;
 
 static bool receivedDataFromPeer;
 static uint64_t firstDataTimeMs;
-static bool receivedFullFrame;
 
 // We can't request an IDR frame until the depacketizer knows
 // that a packet was lost. This timeout bounds the time that
@@ -32,19 +43,43 @@ static bool receivedFullFrame;
 
 // Initialize the video stream
 void initializeVideoStream(void) {
-    initializeVideoDepacketizer(0, StreamConfig.packetSize);
-    RtpvInitializeQueue(&rtpQueue, 0);
+    LC_ASSERT(VideoStreamCount >= 1 && VideoStreamCount <= MAX_VIDEO_STREAMS);
+
+    for (int i = 0; i < VideoStreamCount; i++) {
+        VideoStreams[i].streamIndex = i;
+        VideoStreams[i].receivedFullFrame = false;
+        initializeVideoDepacketizer(i, StreamConfig.packetSize);
+        RtpvInitializeQueue(&VideoStreams[i].rtpQueue, i);
+    }
+
     decryptionCtx = PltCreateCryptoContext();
     receivedDataFromPeer = false;
     firstDataTimeMs = 0;
-    receivedFullFrame = false;
+}
+
+// True once any stream has assembled a complete frame.
+static bool anyStreamReceivedFullFrame(void) {
+    for (int i = 0; i < VideoStreamCount; i++) {
+        if (VideoStreams[i].receivedFullFrame) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Whether the client submits decode units from our own thread rather than pulling them.
+static bool usingDecoderThreads(void) {
+    return (VideoCallbacks.capabilities & (CAPABILITY_DIRECT_SUBMIT | CAPABILITY_PULL_RENDERER)) == 0;
 }
 
 // Clean up the video stream
 void destroyVideoStream(void) {
     PltDestroyCryptoContext(decryptionCtx);
-    destroyVideoDepacketizer(0);
-    RtpvCleanupQueue(&rtpQueue);
+
+    for (int i = 0; i < VideoStreamCount; i++) {
+        destroyVideoDepacketizer(i);
+        RtpvCleanupQueue(&VideoStreams[i].rtpQueue);
+    }
 }
 
 // UDP Ping proc
@@ -87,6 +122,9 @@ static void VideoReceiveThreadProc(void* context) {
     bool useSelect;
     int waitingForVideoMs;
     bool encrypted;
+
+    // TODO(multi-display): route by the stream index in the packet header once it exists
+    PVIDEO_STREAM_CONTEXT stream = &VideoStreams[0];
 
     encrypted = !!(EncryptionFeaturesEnabled & SS_ENC_VIDEO);
     decryptedSize = StreamConfig.packetSize + MAX_RTP_HEADER_SIZE;
@@ -163,7 +201,7 @@ static void VideoReceiveThreadProc(void* context) {
         }
 
 #ifndef LC_FUZZING
-        if (!receivedFullFrame) {
+        if (!anyStreamReceivedFullFrame()) {
             if (PltGetMillis() - firstDataTimeMs >= FIRST_FRAME_TIMEOUT_SEC * 1000) {
                 Limelog("Terminating connection due to lack of a successful video frame\n");
                 ListenerCallbacks.connectionTerminated(ML_ERROR_NO_VIDEO_FRAME);
@@ -202,7 +240,7 @@ static void VideoReceiveThreadProc(void* context) {
             // couldn't already do. If they're not on-link, we just throw their malicious
             // traffic away (as mentioned in the paragraph above) and continue accepting
             // legitmate video traffic.
-            if (encHeader->frameNumber && LE32(encHeader->frameNumber) < RtpvGetCurrentFrameNumber(&rtpQueue)) {
+            if (encHeader->frameNumber && LE32(encHeader->frameNumber) < RtpvGetCurrentFrameNumber(&stream->rtpQueue)) {
                 continue;
             }
 
@@ -223,7 +261,7 @@ static void VideoReceiveThreadProc(void* context) {
         packet->timestamp = BE32(packet->timestamp);
         packet->ssrc = BE32(packet->ssrc);
 
-        queueStatus = RtpvAddPacket(&rtpQueue, packet, err, (PRTPV_QUEUE_ENTRY)&buffer[decryptedSize]);
+        queueStatus = RtpvAddPacket(&stream->rtpQueue, packet, err, (PRTPV_QUEUE_ENTRY)&buffer[decryptedSize]);
 
         if (queueStatus == RTPF_RET_QUEUED) {
             // The queue owns the buffer
@@ -240,18 +278,22 @@ static void VideoReceiveThreadProc(void* context) {
     }
 }
 
-void notifyKeyFrameReceived(void) {
+void notifyKeyFrameReceived(int streamIndex) {
+    LC_ASSERT(streamIndex >= 0 && streamIndex < VideoStreamCount);
+
     // Remember that we got a full frame successfully
-    receivedFullFrame = true;
+    VideoStreams[streamIndex].receivedFullFrame = true;
 }
 
 // Decoder thread proc
 static void VideoDecoderThreadProc(void* context) {
-    while (!PltIsThreadInterrupted(&decoderThread)) {
+    PVIDEO_STREAM_CONTEXT stream = context;
+
+    while (!PltIsThreadInterrupted(&stream->decoderThread)) {
         VIDEO_FRAME_HANDLE frameHandle;
         PDECODE_UNIT decodeUnit;
 
-        if (!LiWaitForNextVideoFrame(&frameHandle, &decodeUnit)) {
+        if (!LiWaitForNextVideoFrame(stream->streamIndex, &frameHandle, &decodeUnit)) {
             return;
         }
 
@@ -265,21 +307,27 @@ void stopVideoStream(void) {
         Limelog("No video traffic was ever received from the host!\n");
     }
 
-    VideoCallbacks.stop();
+    for (int i = 0; i < VideoStreamCount; i++) {
+        VideoCallbacks.stop(i);
 
-    // Wake up client code that may be waiting on the decode unit queue
-    stopVideoDepacketizer(0);
+        // Wake up client code that may be waiting on the decode unit queue
+        stopVideoDepacketizer(i);
+    }
 
     PltInterruptThread(&udpPingThread);
     PltInterruptThread(&receiveThread);
-    if ((VideoCallbacks.capabilities & (CAPABILITY_DIRECT_SUBMIT | CAPABILITY_PULL_RENDERER)) == 0) {
-        PltInterruptThread(&decoderThread);
+    if (usingDecoderThreads()) {
+        for (int i = 0; i < VideoStreamCount; i++) {
+            PltInterruptThread(&VideoStreams[i].decoderThread);
+        }
     }
 
     PltJoinThread(&udpPingThread);
     PltJoinThread(&receiveThread);
-    if ((VideoCallbacks.capabilities & (CAPABILITY_DIRECT_SUBMIT | CAPABILITY_PULL_RENDERER)) == 0) {
-        PltJoinThread(&decoderThread);
+    if (usingDecoderThreads()) {
+        for (int i = 0; i < VideoStreamCount; i++) {
+            PltJoinThread(&VideoStreams[i].decoderThread);
+        }
     }
 
     if (rtpSocket != INVALID_SOCKET) {
@@ -287,49 +335,84 @@ void stopVideoStream(void) {
         rtpSocket = INVALID_SOCKET;
     }
 
-    VideoCallbacks.cleanup();
+    for (int i = 0; i < VideoStreamCount; i++) {
+        VideoCallbacks.cleanup(i);
+    }
 }
 
 // Start the video stream
+// Tear down the streams that were brought up before a failure partway through startup.
+static void unwindStartedStreams(int startedCount, bool decoderThreadsStarted) {
+    if (decoderThreadsStarted) {
+        for (int i = 0; i < startedCount; i++) {
+            PltInterruptThread(&VideoStreams[i].decoderThread);
+        }
+        for (int i = 0; i < startedCount; i++) {
+            PltJoinThread(&VideoStreams[i].decoderThread);
+        }
+    }
+
+    for (int i = 0; i < startedCount; i++) {
+        VideoCallbacks.stop(i);
+        VideoCallbacks.cleanup(i);
+    }
+}
+
 int startVideoStream(void* rendererContext, int drFlags) {
     int err;
+    int setupCount = 0;
 
     // This must be called before the decoder thread starts submitting
     // decode units
     LC_ASSERT(NegotiatedVideoFormat != 0);
-    err = VideoCallbacks.setup(NegotiatedVideoFormat, StreamConfig.width,
-        StreamConfig.height, StreamConfig.fps, rendererContext, drFlags);
-    if (err != 0) {
-        return err;
+    for (int i = 0; i < VideoStreamCount; i++) {
+        err = VideoCallbacks.setup(i, NegotiatedVideoFormat, StreamConfig.width,
+            StreamConfig.height, StreamConfig.fps, rendererContext, drFlags);
+        if (err != 0) {
+            for (int j = 0; j < setupCount; j++) {
+                VideoCallbacks.cleanup(j);
+            }
+            return err;
+        }
+        setupCount++;
     }
 
     rtpSocket = bindUdpSocket(RemoteAddr.ss_family, &LocalAddr, AddrLen,
                               RTP_RECV_PACKETS_BUFFERED * (StreamConfig.packetSize + MAX_RTP_HEADER_SIZE),
                               SOCK_QOS_TYPE_VIDEO);
     if (rtpSocket == INVALID_SOCKET) {
-        VideoCallbacks.cleanup();
+        for (int i = 0; i < VideoStreamCount; i++) {
+            VideoCallbacks.cleanup(i);
+        }
         return LastSocketError();
     }
 
-    VideoCallbacks.start();
+    for (int i = 0; i < VideoStreamCount; i++) {
+        VideoCallbacks.start(i);
+    }
 
     err = PltCreateThread("VideoRecv", VideoReceiveThreadProc, NULL, &receiveThread);
     if (err != 0) {
-        VideoCallbacks.stop();
+        unwindStartedStreams(VideoStreamCount, false);
         closeSocket(rtpSocket);
-        VideoCallbacks.cleanup();
         return err;
     }
 
-    if ((VideoCallbacks.capabilities & (CAPABILITY_DIRECT_SUBMIT | CAPABILITY_PULL_RENDERER)) == 0) {
-        err = PltCreateThread("VideoDec", VideoDecoderThreadProc, NULL, &decoderThread);
-        if (err != 0) {
-            VideoCallbacks.stop();
-            PltInterruptThread(&receiveThread);
-            PltJoinThread(&receiveThread);
-            closeSocket(rtpSocket);
-            VideoCallbacks.cleanup();
-            return err;
+    if (usingDecoderThreads()) {
+        for (int i = 0; i < VideoStreamCount; i++) {
+            err = PltCreateThread("VideoDec", VideoDecoderThreadProc, &VideoStreams[i],
+                                  &VideoStreams[i].decoderThread);
+            if (err != 0) {
+                PltInterruptThread(&receiveThread);
+                PltJoinThread(&receiveThread);
+                unwindStartedStreams(i, true);
+                for (int j = i; j < VideoStreamCount; j++) {
+                    VideoCallbacks.stop(j);
+                    VideoCallbacks.cleanup(j);
+                }
+                closeSocket(rtpSocket);
+                return err;
+            }
         }
     }
 
@@ -337,24 +420,33 @@ int startVideoStream(void* rendererContext, int drFlags) {
     // to send UDP data
     err = PltCreateThread("VideoPing", VideoPingThreadProc, NULL, &udpPingThread);
     if (err != 0) {
-        VideoCallbacks.stop();
-        stopVideoDepacketizer(0);
+        for (int i = 0; i < VideoStreamCount; i++) {
+            VideoCallbacks.stop(i);
+            stopVideoDepacketizer(i);
+        }
         PltInterruptThread(&receiveThread);
-        if ((VideoCallbacks.capabilities & (CAPABILITY_DIRECT_SUBMIT | CAPABILITY_PULL_RENDERER)) == 0) {
-            PltInterruptThread(&decoderThread);
+        if (usingDecoderThreads()) {
+            for (int i = 0; i < VideoStreamCount; i++) {
+                PltInterruptThread(&VideoStreams[i].decoderThread);
+            }
         }
         PltJoinThread(&receiveThread);
-        if ((VideoCallbacks.capabilities & (CAPABILITY_DIRECT_SUBMIT | CAPABILITY_PULL_RENDERER)) == 0) {
-            PltJoinThread(&decoderThread);
+        if (usingDecoderThreads()) {
+            for (int i = 0; i < VideoStreamCount; i++) {
+                PltJoinThread(&VideoStreams[i].decoderThread);
+            }
         }
         closeSocket(rtpSocket);
-        VideoCallbacks.cleanup();
+        for (int i = 0; i < VideoStreamCount; i++) {
+            VideoCallbacks.cleanup(i);
+        }
         return err;
     }
 
     return 0;
 }
 
-const RTP_VIDEO_STATS* LiGetRTPVideoStats(void) {
-    return &rtpQueue.stats;
+const RTP_VIDEO_STATS* LiGetRTPVideoStats(int streamIndex) {
+    LC_ASSERT(streamIndex >= 0 && streamIndex < VideoStreamCount);
+    return &VideoStreams[streamIndex].rtpQueue.stats;
 }

@@ -11,7 +11,7 @@ static FILE* audioFile;
 static DECODER_RENDERER_CALLBACKS realDrCallbacks;
 static AUDIO_RENDERER_CALLBACKS realArCallbacks;
 
-static int recDrSetup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags)
+static int recDrSetup(int streamIndex, int videoFormat, int width, int height, int redrawRate, void* context, int drFlags)
 {
     const char* path = context;
     
@@ -25,17 +25,17 @@ static int recDrSetup(int videoFormat, int width, int height, int redrawRate, vo
         Limelog("Video recording will not be enabled - file path not specified in drContext!\n");
     }
 
-    return realDrCallbacks.setup(videoFormat, width, height, redrawRate, NULL, drFlags);
+    return realDrCallbacks.setup(streamIndex, videoFormat, width, height, redrawRate, NULL, drFlags);
 }
 
-static void recDrCleanup(void)
+static void recDrCleanup(int streamIndex)
 {
     if (videoFile != NULL) {
         fclose(videoFile);
         videoFile = NULL;
     }
 
-    realDrCallbacks.cleanup();
+    realDrCallbacks.cleanup(streamIndex);
 }
 
 static int recDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit)

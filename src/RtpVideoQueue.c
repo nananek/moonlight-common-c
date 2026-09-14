@@ -690,7 +690,7 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
 
         // Tell the control stream logic about this frame, even if we don't end up
         // being able to reconstruct a full frame from it.
-        connectionSawFrame(queue->currentFrameNumber);
+        connectionSawFrame(queue->streamIndex, queue->currentFrameNumber);
 
         queue->bufferFirstRecvTimeUs = PltGetMicroseconds();
         queue->bufferLowestSequenceNumber = U16(packet->sequenceNumber - fecIndex);

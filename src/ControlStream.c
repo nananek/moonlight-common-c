@@ -244,7 +244,7 @@ void destroyControlStream(void) {
     PltDeleteMutex(&enetMutex);
 }
 
-static void queueFrameInvalidationTuple(uint32_t startFrame, uint32_t endFrame) {
+static void queueFrameInvalidationTuple(int streamIndex, uint32_t startFrame, uint32_t endFrame) {
     LC_ASSERT(startFrame <= endFrame);
 
     if (isReferenceFrameInvalidationEnabled()) {
@@ -260,20 +260,24 @@ static void queueFrameInvalidationTuple(uint32_t startFrame, uint32_t endFrame) 
                 // Too many invalidation tuples, so we need an IDR frame now
                 Limelog("RFI range list reached maximum size limit\n");
                 free(qfit);
-                LiRequestIdrFrame();
+                LiRequestIdrFrame(streamIndex);
             }
         }
         else {
-            LiRequestIdrFrame();
+            LiRequestIdrFrame(streamIndex);
         }
     }
     else {
-        LiRequestIdrFrame();
+        LiRequestIdrFrame(streamIndex);
     }
 }
 
 // Request an IDR frame on demand by the decoder
-void LiRequestIdrFrame(void) {
+void LiRequestIdrFrame(int streamIndex) {
+    // TODO(multi-display): the control protocol carries no per-stream IDR request yet,
+    // so an IDR asked for on one stream still refreshes the whole session.
+    (void)streamIndex;
+
     // Any reference frame invalidation requests should be dropped now.
     // We require a full IDR frame to recover.
     freeBasicLbqList(LbqFlushQueueItems(&referenceFrameControlQueue));
@@ -283,13 +287,13 @@ void LiRequestIdrFrame(void) {
 }
 
 // Invalidate reference frames lost by the network
-void connectionDetectedFrameLoss(uint32_t startFrame, uint32_t endFrame) {
-    queueFrameInvalidationTuple(startFrame, endFrame);
+void connectionDetectedFrameLoss(int streamIndex, uint32_t startFrame, uint32_t endFrame) {
+    queueFrameInvalidationTuple(streamIndex, startFrame, endFrame);
 }
 
 // When we receive a frame, update the number of our current frame
 // and send ACK control message if the frame is LTR
-void connectionReceivedCompleteFrame(uint32_t frameIndex, bool frameIsLTR) {
+void connectionReceivedCompleteFrame(int streamIndex, uint32_t frameIndex, bool frameIsLTR) {
     lastGoodFrame = frameIndex;
     intervalGoodFrameCount++;
 
@@ -307,7 +311,7 @@ void connectionReceivedCompleteFrame(uint32_t frameIndex, bool frameIsLTR) {
                 LC_ASSERT(false);
                 Limelog("Couldn't queue LTR ACK because the list has reached maximum size limit\n");
                 free(qfit);
-                LiRequestIdrFrame();
+                LiRequestIdrFrame(streamIndex);
             }
         }
     }
@@ -326,7 +330,7 @@ void connectionSendFrameFecStatus(PSS_FRAME_FEC_STATUS fecStatus) {
     }
 }
 
-void connectionSawFrame(uint32_t frameIndex) {
+void connectionSawFrame(int streamIndex, uint32_t frameIndex) {
     LC_ASSERT_VT(!isBefore16(frameIndex, lastSeenFrame));
 
     uint64_t now = PltGetMillis();

@@ -145,6 +145,9 @@ typedef struct _LENTRY {
 
 // A decode unit describes a buffer chain of video data from multiple packets
 typedef struct _DECODE_UNIT {
+    // Index of the video stream this frame belongs to
+    int streamIndex;
+
     // Frame number
     int frameNumber;
 
@@ -286,16 +289,16 @@ typedef struct _DECODE_UNIT {
 
 // This callback is invoked to provide details about the video stream and allow configuration of the decoder.
 // Returns 0 on success, non-zero on failure.
-typedef int(*DecoderRendererSetup)(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags);
+typedef int(*DecoderRendererSetup)(int streamIndex, int videoFormat, int width, int height, int redrawRate, void* context, int drFlags);
 
 // This callback notifies the decoder that the stream is starting. No frames can be submitted before this callback returns.
-typedef void(*DecoderRendererStart)(void);
+typedef void(*DecoderRendererStart)(int streamIndex);
 
 // This callback notifies the decoder that the stream is stopping. Frames may still be submitted but they may be safely discarded.
-typedef void(*DecoderRendererStop)(void);
+typedef void(*DecoderRendererStop)(int streamIndex);
 
 // This callback performs the teardown of the video decoder. No more frames will be submitted when this callback is invoked.
-typedef void(*DecoderRendererCleanup)(void);
+typedef void(*DecoderRendererCleanup)(int streamIndex);
 
 
 // This callback provides Annex B formatted elementary stream data to the
@@ -865,7 +868,7 @@ int LiFindExternalAddressIP4(const char* stunServer, unsigned short stunPort, un
 
 // Returns the number of queued video frames ready for delivery. Only relevant
 // if CAPABILITY_DIRECT_SUBMIT is not set for the video renderer.
-int LiGetPendingVideoFrames(void);
+int LiGetPendingVideoFrames(int streamIndex);
 
 // Returns the number of queued audio frames ready for delivery. Only relevant
 // if CAPABILITY_DIRECT_SUBMIT is not set for the audio renderer. For most uses,
@@ -905,7 +908,7 @@ typedef struct _RTP_VIDEO_STATS {
     uint32_t packetCountFecInvalid;    // invalid FEC packet
 } RTP_VIDEO_STATS, *PRTP_VIDEO_STATS;
 
-const RTP_VIDEO_STATS* LiGetRTPVideoStats(void);
+const RTP_VIDEO_STATS* LiGetRTPVideoStats(int streamIndex);
 
 // Port index flags for use with LiGetPortFromPortFlagIndex() and LiGetProtocolFromPortFlagIndex()
 #define ML_PORT_INDEX_TCP_47984 0
@@ -966,10 +969,10 @@ unsigned int LiTestClientConnectivity(const char* testServer, unsigned short ref
 //
 // In order to safely use these functions, you must set CAPABILITY_PULL_RENDERER on the video decoder.
 typedef void* VIDEO_FRAME_HANDLE;
-bool LiWaitForNextVideoFrame(VIDEO_FRAME_HANDLE* frameHandle, PDECODE_UNIT* decodeUnit);
-bool LiPollNextVideoFrame(VIDEO_FRAME_HANDLE* frameHandle, PDECODE_UNIT* decodeUnit);
-bool LiPeekNextVideoFrame(PDECODE_UNIT* decodeUnit);
-void LiWakeWaitForVideoFrame(void);
+bool LiWaitForNextVideoFrame(int streamIndex, VIDEO_FRAME_HANDLE* frameHandle, PDECODE_UNIT* decodeUnit);
+bool LiPollNextVideoFrame(int streamIndex, VIDEO_FRAME_HANDLE* frameHandle, PDECODE_UNIT* decodeUnit);
+bool LiPeekNextVideoFrame(int streamIndex, PDECODE_UNIT* decodeUnit);
+void LiWakeWaitForVideoFrame(int streamIndex);
 void LiCompleteVideoFrame(VIDEO_FRAME_HANDLE handle, int drStatus);
 
 // This function returns the last reported HDR mode from the host PC.
@@ -1009,7 +1012,7 @@ bool LiGetHdrMetadata(PSS_HDR_METADATA metadata);
 // the prior frame. Rather than wait for a new frame and return DR_NEED_IDR for that one, they can just
 // call this API instead. Note that this function does not guarantee that the *next* frame will be an IDR
 // frame, just that an IDR frame will arrive soon.
-void LiRequestIdrFrame(void);
+void LiRequestIdrFrame(int streamIndex);
 
 // This function returns any extended feature flags supported by the host.
 #define LI_FF_PEN_TOUCH_EVENTS        0x01 // LiSendTouchEvent()/LiSendPenEvent() supported

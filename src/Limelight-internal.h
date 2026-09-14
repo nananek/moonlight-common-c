@@ -120,9 +120,9 @@ int initializeControlStream(void);
 int startControlStream(void);
 int stopControlStream(void);
 void destroyControlStream(void);
-void connectionDetectedFrameLoss(uint32_t startFrame, uint32_t endFrame);
-void connectionReceivedCompleteFrame(uint32_t frameIndex, bool frameIsLTR);
-void connectionSawFrame(uint32_t frameIndex);
+void connectionDetectedFrameLoss(int streamIndex, uint32_t startFrame, uint32_t endFrame);
+void connectionReceivedCompleteFrame(int streamIndex, uint32_t frameIndex, bool frameIsLTR);
+void connectionSawFrame(int streamIndex, uint32_t frameIndex);
 void connectionSendFrameFecStatus(PSS_FRAME_FEC_STATUS fecStatus);
 int sendInputPacketOnControlStream(unsigned char* data, int length, uint8_t channelId, uint32_t flags, bool moreData);
 void flushInputOnControlStream(void);
@@ -139,7 +139,9 @@ void notifyFrameLost(int streamIndex, unsigned int frameNumber, bool speculative
 
 void initializeVideoStream(void);
 void destroyVideoStream(void);
-void notifyKeyFrameReceived(void);
+void notifyKeyFrameReceived(int streamIndex);
+
+extern int VideoStreamCount;
 int startVideoStream(void* rendererContext, int drFlags);
 void stopVideoStream(void);
 

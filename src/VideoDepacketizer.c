@@ -141,7 +141,7 @@ static void dropFrameState(PVIDEO_DEPACKETIZER ctx) {
 
         // Request an IDR frame
         ctx->waitingForIdrFrame = true;
-        LiRequestIdrFrame();
+        LiRequestIdrFrame(ctx->streamIndex);
     }
 
     cleanupFrameState(ctx);
@@ -252,9 +252,8 @@ void validateDecodeUnitForPlayback(PDECODE_UNIT decodeUnit) {
     }
 }
 
-bool LiWaitForNextVideoFrame(VIDEO_FRAME_HANDLE* frameHandle, PDECODE_UNIT* decodeUnit) {
-    // TODO(multi-display): this public entry point needs a stream index of its own
-    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(0);
+bool LiWaitForNextVideoFrame(int streamIndex, VIDEO_FRAME_HANDLE* frameHandle, PDECODE_UNIT* decodeUnit) {
+    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(streamIndex);
     PQUEUED_DECODE_UNIT qdu;
 
     int err = LbqWaitForQueueElement(&ctx->decodeUnitQueue, (void**)&qdu);
@@ -269,9 +268,8 @@ bool LiWaitForNextVideoFrame(VIDEO_FRAME_HANDLE* frameHandle, PDECODE_UNIT* deco
     return true;
 }
 
-bool LiPollNextVideoFrame(VIDEO_FRAME_HANDLE* frameHandle, PDECODE_UNIT* decodeUnit) {
-    // TODO(multi-display): this public entry point needs a stream index of its own
-    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(0);
+bool LiPollNextVideoFrame(int streamIndex, VIDEO_FRAME_HANDLE* frameHandle, PDECODE_UNIT* decodeUnit) {
+    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(streamIndex);
     PQUEUED_DECODE_UNIT qdu;
 
     int err = LbqPollQueueElement(&ctx->decodeUnitQueue, (void**)&qdu);
@@ -286,9 +284,8 @@ bool LiPollNextVideoFrame(VIDEO_FRAME_HANDLE* frameHandle, PDECODE_UNIT* decodeU
     return true;
 }
 
-bool LiPeekNextVideoFrame(PDECODE_UNIT* decodeUnit) {
-    // TODO(multi-display): this public entry point needs a stream index of its own
-    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(0);
+bool LiPeekNextVideoFrame(int streamIndex, PDECODE_UNIT* decodeUnit) {
+    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(streamIndex);
     PQUEUED_DECODE_UNIT qdu;
 
     int err = LbqPeekQueueElement(&ctx->decodeUnitQueue, (void**)&qdu);
@@ -302,17 +299,15 @@ bool LiPeekNextVideoFrame(PDECODE_UNIT* decodeUnit) {
     return true;
 }
 
-void LiWakeWaitForVideoFrame(void) {
-    // TODO(multi-display): this public entry point needs a stream index of its own
-    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(0);
+void LiWakeWaitForVideoFrame(int streamIndex) {
+    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(streamIndex);
     LbqSignalQueueUserWake(&ctx->decodeUnitQueue);
 }
 
 // Cleanup a decode unit by freeing the buffer chain and the holder
 void LiCompleteVideoFrame(VIDEO_FRAME_HANDLE handle, int drStatus) {
-    // TODO(multi-display): this public entry point needs a stream index of its own
-    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(0);
     PQUEUED_DECODE_UNIT qdu = handle;
+    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(qdu->decodeUnit.streamIndex);
     PLENTRY_INTERNAL lastEntry;
 
     if (drStatus == DR_NEED_IDR) {
@@ -509,6 +504,7 @@ static void reassembleFrame(PVIDEO_DEPACKETIZER ctx, int frameNumber, bool frame
         }
 
         if (qdu != NULL) {
+            qdu->decodeUnit.streamIndex = ctx->streamIndex;
             qdu->decodeUnit.bufferList = ctx->nalChainHead;
             qdu->decodeUnit.fullLength = ctx->nalChainDataLength;
             qdu->decodeUnit.frameType = ctx->frameType;
@@ -529,7 +525,7 @@ static void reassembleFrame(PVIDEO_DEPACKETIZER ctx, int frameNumber, bool frame
             // Invoke the key frame callback if needed
             if (ctx->nalChainHead->bufferType != BUFFER_TYPE_PICDATA || qdu->decodeUnit.frameType == FRAME_TYPE_IDR) {
                 qdu->decodeUnit.frameType = FRAME_TYPE_IDR;
-                notifyKeyFrameReceived();
+                notifyKeyFrameReceived(ctx->streamIndex);
             }
             else {
                 qdu->decodeUnit.frameType = FRAME_TYPE_PFRAME;
@@ -557,7 +553,7 @@ static void reassembleFrame(PVIDEO_DEPACKETIZER ctx, int frameNumber, bool frame
                     freeDecodeUnitList(LbqFlushQueueItems(&ctx->decodeUnitQueue));
 
                     // Request an IDR frame to recover
-                    LiRequestIdrFrame();
+                    LiRequestIdrFrame(ctx->streamIndex);
                     return;
                 }
             }
@@ -568,7 +564,7 @@ static void reassembleFrame(PVIDEO_DEPACKETIZER ctx, int frameNumber, bool frame
             }
 
             // Notify the control connection
-            connectionReceivedCompleteFrame(frameNumber, frameIsLTR);
+            connectionReceivedCompleteFrame(ctx->streamIndex, frameNumber, frameIsLTR);
 
             // Clear frame drops
             ctx->consecutiveFrameDrops = 0;
@@ -758,7 +754,7 @@ void requestDecoderRefresh(int streamIndex) {
     ctx->dropStatePending = true;
 
     // Request the IDR frame
-    LiRequestIdrFrame();
+    LiRequestIdrFrame(ctx->streamIndex);
 }
 
 // Return 1 if packet is the first one in the frame
@@ -819,10 +815,10 @@ static void processRtpPayload(PVIDEO_DEPACKETIZER ctx, PNV_VIDEO_PACKET videoPac
         ctx->nextFrameNumber = frameIndex + 1;
         dropFrameState(ctx);
         if (ctx->waitingForIdrFrame) {
-            LiRequestIdrFrame();
+            LiRequestIdrFrame(ctx->streamIndex);
         }
         else {
-            connectionDetectedFrameLoss(ctx->startFrameNumber, frameIndex);
+            connectionDetectedFrameLoss(ctx->streamIndex, ctx->startFrameNumber, frameIndex);
         }
         return;
     }
@@ -918,7 +914,7 @@ static void processRtpPayload(PVIDEO_DEPACKETIZER ctx, PNV_VIDEO_PACKET videoPac
         else {
             // Hope for the best with older servers
             if (ctx->waitingForRefInvalFrame) {
-                connectionDetectedFrameLoss(ctx->startFrameNumber, frameIndex - 1);
+                connectionDetectedFrameLoss(ctx->streamIndex, ctx->startFrameNumber, frameIndex - 1);
                 ctx->waitingForRefInvalFrame = false;
                 ctx->waitingForNextSuccessfulFrame = false;
             }
@@ -1042,10 +1038,10 @@ static void processRtpPayload(PVIDEO_DEPACKETIZER ctx, PNV_VIDEO_PACKET videoPac
                 ctx->nextFrameNumber = frameIndex + 1;
                 dropFrameState(ctx);
                 if (ctx->waitingForIdrFrame) {
-                    LiRequestIdrFrame();
+                    LiRequestIdrFrame(ctx->streamIndex);
                 }
                 else {
-                    connectionDetectedFrameLoss(ctx->startFrameNumber, frameIndex);
+                    connectionDetectedFrameLoss(ctx->streamIndex, ctx->startFrameNumber, frameIndex);
                 }
 
                 return;
@@ -1072,14 +1068,14 @@ static void processRtpPayload(PVIDEO_DEPACKETIZER ctx, PNV_VIDEO_PACKET videoPac
                 // detection of the recovery of the network. Requesting an IDR frame while
                 // the network is unstable will just contribute to congestion collapse.
                 if (ctx->waitingForNextSuccessfulFrame) {
-                    LiRequestIdrFrame();
+                    LiRequestIdrFrame(ctx->streamIndex);
                 }
             }
             else {
                 // If we need an RFI frame first, then drop this frame
                 // and update the reference frame invalidation window.
                 Limelog("Waiting for RFI frame\n");
-                connectionDetectedFrameLoss(ctx->startFrameNumber, frameIndex);
+                connectionDetectedFrameLoss(ctx->streamIndex, ctx->startFrameNumber, frameIndex);
             }
 
             ctx->waitingForNextSuccessfulFrame = false;
@@ -1140,7 +1136,7 @@ void notifyFrameLost(int streamIndex, unsigned int frameNumber, bool speculative
         ctx->nextFrameNumber = frameNumber + 1;
 
         // Notify the host that we lost this one
-        connectionDetectedFrameLoss(ctx->startFrameNumber, frameNumber);
+        connectionDetectedFrameLoss(ctx->streamIndex, ctx->startFrameNumber, frameNumber);
     }
 }
 
@@ -1181,8 +1177,7 @@ void queueRtpPacket(int streamIndex, PRTPV_QUEUE_ENTRY queueEntryPtr) {
     }
 }
 
-int LiGetPendingVideoFrames(void) {
-    // TODO(multi-display): this public entry point needs a stream index of its own
-    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(0);
+int LiGetPendingVideoFrames(int streamIndex) {
+    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(streamIndex);
     return LbqGetItemCount(&ctx->decodeUnitQueue);
 }

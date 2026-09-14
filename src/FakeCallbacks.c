@@ -1,9 +1,9 @@
 #include "Limelight-internal.h"
 
-static int fakeDrSetup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags) { return 0; }
-static void fakeDrStart(void) {}
-static void fakeDrStop(void) {}
-static void fakeDrCleanup(void) {}
+static int fakeDrSetup(int streamIndex, int videoFormat, int width, int height, int redrawRate, void* context, int drFlags) { return 0; }
+static void fakeDrStart(int streamIndex) {}
+static void fakeDrStop(int streamIndex) {}
+static void fakeDrCleanup(int streamIndex) {}
 static int fakeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) { return DR_OK; }
 
 static DECODER_RENDERER_CALLBACKS fakeDrCallbacks = {
