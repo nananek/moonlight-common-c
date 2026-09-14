@@ -1,14 +1,10 @@
 #include "Limelight-internal.h"
 
-#define FIRST_FRAME_MAX 1500
 #define FIRST_FRAME_TIMEOUT_SEC 10
-
-#define FIRST_FRAME_PORT 47996
 
 static RTP_VIDEO_QUEUE rtpQueue;
 
 static SOCKET rtpSocket = INVALID_SOCKET;
-static SOCKET firstFrameSocket = INVALID_SOCKET;
 
 static PPLT_CRYPTO_CONTEXT decryptionCtx;
 
@@ -263,17 +259,6 @@ static void VideoDecoderThreadProc(void* context) {
     }
 }
 
-// Read the first frame of the video stream
-int readFirstFrame(void) {
-    // All that matters is that we close this socket.
-    // This starts the flow of video on Gen 3 servers.
-
-    closeSocket(firstFrameSocket);
-    firstFrameSocket = INVALID_SOCKET;
-
-    return 0;
-}
-
 // Terminate the video stream
 void stopVideoStream(void) {
     if (!receivedDataFromPeer) {
@@ -291,20 +276,12 @@ void stopVideoStream(void) {
         PltInterruptThread(&decoderThread);
     }
 
-    if (firstFrameSocket != INVALID_SOCKET) {
-        shutdownTcpSocket(firstFrameSocket);
-    }
-
     PltJoinThread(&udpPingThread);
     PltJoinThread(&receiveThread);
     if ((VideoCallbacks.capabilities & (CAPABILITY_DIRECT_SUBMIT | CAPABILITY_PULL_RENDERER)) == 0) {
         PltJoinThread(&decoderThread);
     }
 
-    if (firstFrameSocket != INVALID_SOCKET) {
-        closeSocket(firstFrameSocket);
-        firstFrameSocket = INVALID_SOCKET;
-    }
     if (rtpSocket != INVALID_SOCKET) {
         closeSocket(rtpSocket);
         rtpSocket = INVALID_SOCKET;
@@ -316,8 +293,6 @@ void stopVideoStream(void) {
 // Start the video stream
 int startVideoStream(void* rendererContext, int drFlags) {
     int err;
-
-    firstFrameSocket = INVALID_SOCKET;
 
     // This must be called before the decoder thread starts submitting
     // decode units
@@ -358,28 +333,7 @@ int startVideoStream(void* rendererContext, int drFlags) {
         }
     }
 
-    if (AppVersionQuad[0] == 3) {
-        // Connect this socket to open port 47998 for our ping thread
-        firstFrameSocket = connectTcpSocket(&RemoteAddr, AddrLen,
-                                            FIRST_FRAME_PORT, FIRST_FRAME_TIMEOUT_SEC);
-        if (firstFrameSocket == INVALID_SOCKET) {
-            VideoCallbacks.stop();
-            stopVideoDepacketizer();
-            PltInterruptThread(&receiveThread);
-            if ((VideoCallbacks.capabilities & (CAPABILITY_DIRECT_SUBMIT | CAPABILITY_PULL_RENDERER)) == 0) {
-                PltInterruptThread(&decoderThread);
-            }
-            PltJoinThread(&receiveThread);
-            if ((VideoCallbacks.capabilities & (CAPABILITY_DIRECT_SUBMIT | CAPABILITY_PULL_RENDERER)) == 0) {
-                PltJoinThread(&decoderThread);
-            }
-            closeSocket(rtpSocket);
-            VideoCallbacks.cleanup();
-            return LastSocketError();
-        }
-    }
-
-    // Start pinging before reading the first frame so GFE knows where
+    // Start pinging before reading the first frame so the host knows where
     // to send UDP data
     err = PltCreateThread("VideoPing", VideoPingThreadProc, NULL, &udpPingThread);
     if (err != 0) {
@@ -394,21 +348,8 @@ int startVideoStream(void* rendererContext, int drFlags) {
             PltJoinThread(&decoderThread);
         }
         closeSocket(rtpSocket);
-        if (firstFrameSocket != INVALID_SOCKET) {
-            closeSocket(firstFrameSocket);
-            firstFrameSocket = INVALID_SOCKET;
-        }
         VideoCallbacks.cleanup();
         return err;
-    }
-
-    if (AppVersionQuad[0] == 3) {
-        // Read the first frame to start the flow of video
-        err = readFirstFrame();
-        if (err != 0) {
-            stopVideoStream();
-            return err;
-        }
     }
 
     return 0;

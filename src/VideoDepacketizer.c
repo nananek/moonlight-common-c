@@ -855,7 +855,7 @@ static void processRtpPayload(PNV_VIDEO_PACKET videoPacket, int length,
     if (firstPacket && currentPos.length > 0) {
         // Parse the frame type from the header
         LC_ASSERT_VT(currentPos.length >= 4);
-        if (APP_VERSION_AT_LEAST(7, 1, 350) && currentPos.length >= 4) {
+        if (currentPos.length >= 4) {
             switch (currentPos.data[currentPos.offset + 3]) {
             case 1: // Normal P-frame
                 break;
@@ -895,9 +895,9 @@ static void processRtpPayload(PNV_VIDEO_PACKET videoPacket, int length,
             }
         }
 
-        // Sunshine can provide host processing latency of the frame
+        // The host provides the processing latency of the frame
         LC_ASSERT_VT(currentPos.length >= 3);
-        if (IS_SUNSHINE() && currentPos.length >= 3) {
+        if (currentPos.length >= 3) {
             BYTE_BUFFER bb;
             BbInitializeWrappedBuffer(&bb, currentPos.data, currentPos.offset + 1, 2, BYTE_ORDER_LITTLE);
             BbGet16(&bb, &frameHostProcessingLatency);
@@ -912,57 +912,15 @@ static void processRtpPayload(PNV_VIDEO_PACKET videoPacket, int length,
             BbGet16(&bb, &lastPacketPayloadLength);
         }
 
-        if (APP_VERSION_AT_LEAST(7, 1, 450)) {
-            // >= 7.1.450 uses 2 different header lengths based on the first byte:
-            // 0x01 indicates an 8 byte header
-            // 0x81 indicates a 44 byte header
-            if (currentPos.data[0] == 0x01) {
-                frameHeaderSize = 8;
-            }
-            else {
-                LC_ASSERT_VT(currentPos.data[0] == (char)0x81);
-                frameHeaderSize = 44;
-            }
-        }
-        else if (APP_VERSION_AT_LEAST(7, 1, 446)) {
-            // [7.1.446, 7.1.450) uses 2 different header lengths based on the first byte:
-            // 0x01 indicates an 8 byte header
-            // 0x81 indicates a 41 byte header
-            if (currentPos.data[0] == 0x01) {
-                frameHeaderSize = 8;
-            }
-            else {
-                LC_ASSERT_VT(currentPos.data[0] == (char)0x81);
-                frameHeaderSize = 41;
-            }
-        }
-        else if (APP_VERSION_AT_LEAST(7, 1, 415)) {
-            // [7.1.415, 7.1.446) uses 2 different header lengths based on the first byte:
-            // 0x01 indicates an 8 byte header
-            // 0x81 indicates a 24 byte header
-            if (currentPos.data[0] == 0x01) {
-                frameHeaderSize = 8;
-            }
-            else {
-                LC_ASSERT_VT(currentPos.data[0] == (char)0x81);
-                frameHeaderSize = 24;
-            }
-        }
-        else if (APP_VERSION_AT_LEAST(7, 1, 350)) {
-            // [7.1.350, 7.1.415) should use the 8 byte header again
-            frameHeaderSize = 8;
-        }
-        else if (APP_VERSION_AT_LEAST(7, 1, 320)) {
-            // [7.1.320, 7.1.350) should use the 12 byte frame header
-            frameHeaderSize = 12;
-        }
-        else if (APP_VERSION_AT_LEAST(5, 0, 0)) {
-            // [5.x, 7.1.320) should use the 8 byte header
+        // Two different header lengths are possible, selected by the first byte:
+        // 0x01 indicates an 8 byte header (what Sunshine always sends today)
+        // 0x81 indicates a 24 byte header
+        if (currentPos.data[0] == 0x01) {
             frameHeaderSize = 8;
         }
         else {
-            // Other versions don't have a frame header at all
-            frameHeaderSize = 0;
+            LC_ASSERT_VT(currentPos.data[0] == (char)0x81);
+            frameHeaderSize = 24;
         }
 
         LC_ASSERT_VT(currentPos.length >= frameHeaderSize);

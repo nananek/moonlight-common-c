@@ -27,24 +27,6 @@ void RtpaInitializeQueue(PRTP_AUDIO_QUEUE queue) {
     // full FEC block before reporting losses, out of order packets, etc.
     queue->synchronizing = true;
 
-    // Older versions of GFE violate some invariants that our FEC code requires, so we turn it off for
-    // anything older than GFE 3.19 just to be safe. GFE seems to have changed to the "modern" behavior
-    // between GFE 3.18 and 3.19.
-    //
-    // In the case of GFE 3.13, it does send FEC packets but it requires very special handling because:
-    // a) data and FEC shards may vary in size
-    // b) FEC blocks can start on boundaries that are not multiples of RTPA_DATA_SHARDS
-    //
-    // It doesn't seem worth it to sink a bunch of hours into figure out how to properly handle audio FEC
-    // for a 3 year old version of GFE that almost nobody uses. Instead, we'll just disable the FEC queue
-    // entirely and pass all audio data straight to the decoder.
-    //
-    if (!APP_VERSION_AT_LEAST(7, 1, 415)) {
-        Limelog("Audio FEC has been disabled due to an incompatibility with your host's old software.\n");
-        Limelog("Audio quality may suffer on unreliable network connections due to lack of FEC!\n");
-        queue->incompatibleServer = true;
-    }
-
     reed_solomon_init();
 
     // The number of data and parity shards is constant, so we can reuse

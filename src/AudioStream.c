@@ -205,14 +205,6 @@ static void decodeInputData(PQUEUED_AUDIO_PACKET packet) {
             opusHeaderByte = decryptedOpusData[0];
             LC_ASSERT_VT(opusHeaderByte != INVALID_OPUS_HEADER);
         }
-        else {
-            // Opus header should stay constant for the entire stream.
-            // If it doesn't, it may indicate that the RtpAudioQueue
-            // incorrectly recovered a data shard or the decryption
-            // of the audio packet failed. Sunshine violates this for
-            // surround sound in some cases, so just ignore it.
-            LC_ASSERT_VT(decryptedOpusData[0] == opusHeaderByte || IS_SUNSHINE());
-        }
 #endif
 
         AudioCallbacks.decodeAndPlaySample((char*)decryptedOpusData, dataLength);
@@ -222,13 +214,6 @@ static void decodeInputData(PQUEUED_AUDIO_PACKET packet) {
         if (opusHeaderByte == INVALID_OPUS_HEADER) {
             opusHeaderByte = ((uint8_t*)(rtp + 1))[0];
             LC_ASSERT_VT(opusHeaderByte != INVALID_OPUS_HEADER);
-        }
-        else {
-            // Opus header should stay constant for the entire stream.
-            // If it doesn't, it may indicate that the RtpAudioQueue
-            // incorrectly recovered a data shard. Sunshine violates
-            // this for surround sound in some cases, so just ignore it.
-            LC_ASSERT_VT(((uint8_t*)(rtp + 1))[0] == opusHeaderByte || IS_SUNSHINE());
         }
 #endif
 

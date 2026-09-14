@@ -91,7 +91,6 @@ static SOCKET ctlSock = INVALID_SOCKET;
 static ENetHost* client;
 static ENetPeer* peer;
 static PLT_MUTEX enetMutex;
-static bool usePeriodicPing;
 
 static PLT_THREAD lossStatsThread;
 static PLT_THREAD invalidateRefFramesThread;
@@ -144,62 +143,6 @@ static PPLT_CRYPTO_CONTEXT decryptionCtx;
 #define CONTROL_STREAM_TIMEOUT_SEC 10
 #define CONTROL_STREAM_LINGER_TIMEOUT_SEC 2
 
-static const short packetTypesGen3[] = {
-    0x1407, // Request IDR frame
-    0x1410, // Start B
-    0x1404, // Invalidate reference frames
-    0x140c, // Loss Stats
-    0x1417, // Frame Stats (unused)
-    -1,     // Input data (unused)
-    -1,     // Rumble data (unused)
-    -1,     // Termination (unused)
-    -1,     // HDR mode (unused)
-    -1,     // Rumble triggers (unused)
-    -1,     // Set motion event (unused)
-    -1,     // Set RGB LED (unused)
-};
-static const short packetTypesGen4[] = {
-    0x0606, // Request IDR frame
-    0x0609, // Start B
-    0x0604, // Invalidate reference frames
-    0x060a, // Loss Stats
-    0x0611, // Frame Stats (unused)
-    -1,     // Input data (unused)
-    -1,     // Rumble data (unused)
-    -1,     // Termination (unused)
-    -1,     // HDR mode (unused)
-    -1,     // Rumble triggers (unused)
-    -1,     // Set motion event (unused)
-    -1,     // Set RGB LED (unused)
-};
-static const short packetTypesGen5[] = {
-    0x0305, // Start A
-    0x0307, // Start B
-    0x0301, // Invalidate reference frames
-    0x0201, // Loss Stats
-    0x0204, // Frame Stats (unused)
-    0x0207, // Input data
-    -1,     // Rumble data (unused)
-    -1,     // Termination (unused)
-    -1,     // HDR mode (unknown)
-    -1,     // Rumble triggers (unused)
-    -1,     // Set motion event (unused)
-    -1,     // Set RGB LED (unused)
-};
-static const short packetTypesGen7[] = {
-    0x0305, // Start A
-    0x0307, // Start B
-    0x0301, // Invalidate reference frames
-    0x0201, // Loss Stats
-    0x0204, // Frame Stats (unused)
-    0x0206, // Input data
-    0x010b, // Rumble data
-    0x0100, // Termination
-    0x010e, // HDR mode
-    -1,     // Rumble triggers (unused)
-    -1,     // Set motion event (unused)
-    -1,     // Set RGB LED (unused)
-};
 static const short packetTypesGen7Enc[] = {
     0x0302, // Request IDR frame
     0x0307, // Start B
@@ -216,49 +159,12 @@ static const short packetTypesGen7Enc[] = {
     0x5503, // Set Adaptive Triggers (Sunshine protocol extension)
 };
 
-static const char requestIdrFrameGen3[] = { 0, 0 };
-static const int startBGen3[] = { 0, 0, 0, 0xa };
 
-static const char requestIdrFrameGen4[] = { 0, 0 };
-static const char startBGen4[] = { 0 };
 
-static const char startAGen5[] = { 0, 0 };
 static const char startBGen5[] = { 0 };
 
 static const char requestIdrFrameGen7Enc[] = { 0, 0 };
 
-static const short payloadLengthsGen3[] = {
-    sizeof(requestIdrFrameGen3), // Request IDR frame
-    sizeof(startBGen3), // Start B
-    24, // Invalidate reference frames
-    32, // Loss Stats
-    64, // Frame Stats
-    -1, // Input data
-};
-static const short payloadLengthsGen4[] = {
-    sizeof(requestIdrFrameGen4), // Request IDR frame
-    sizeof(startBGen4), // Start B
-    24, // Invalidate reference frames
-    32, // Loss Stats
-    64, // Frame Stats
-    -1, // Input data
-};
-static const short payloadLengthsGen5[] = {
-    sizeof(startAGen5), // Start A
-    sizeof(startBGen5), // Start B
-    24, // Invalidate reference frames
-    32, // Loss Stats
-    80, // Frame Stats
-    -1, // Input data
-};
-static const short payloadLengthsGen7[] = {
-    sizeof(startAGen5), // Start A
-    sizeof(startBGen5), // Start B
-    24, // Invalidate reference frames
-    32, // Loss Stats
-    80, // Frame Stats
-    -1, // Input data
-};
 static const short payloadLengthsGen7Enc[] = {
     sizeof(requestIdrFrameGen7Enc), // Request IDR frame
     sizeof(startBGen5), // Start B
@@ -268,22 +174,6 @@ static const short payloadLengthsGen7Enc[] = {
     -1, // Input data
 };
 
-static const char* preconstructedPayloadsGen3[] = {
-    requestIdrFrameGen3,
-    (char*)startBGen3
-};
-static const char* preconstructedPayloadsGen4[] = {
-    requestIdrFrameGen4,
-    startBGen4
-};
-static const char* preconstructedPayloadsGen5[] = {
-    startAGen5,
-    startBGen5
-};
-static const char* preconstructedPayloadsGen7[] = {
-    startAGen5,
-    startBGen5
-};
 static const char* preconstructedPayloadsGen7Enc[] = {
     requestIdrFrameGen7Enc,
     startBGen5
@@ -306,40 +196,12 @@ int initializeControlStream(void) {
     LbqInitializeLinkedBlockingQueue(&asyncCallbackQueue, 30);
     PltCreateMutex(&enetMutex);
 
-    encryptedControlStream = APP_VERSION_AT_LEAST(7, 1, 431);
+    encryptedControlStream = true;
 
-    if (AppVersionQuad[0] == 3) {
-        packetTypes = (short*)packetTypesGen3;
-        payloadLengths = (short*)payloadLengthsGen3;
-        preconstructedPayloads = (char**)preconstructedPayloadsGen3;
-        supportsIdrFrameRequest = true;
-    }
-    else if (AppVersionQuad[0] == 4) {
-        packetTypes = (short*)packetTypesGen4;
-        payloadLengths = (short*)payloadLengthsGen4;
-        preconstructedPayloads = (char**)preconstructedPayloadsGen4;
-        supportsIdrFrameRequest = true;
-    }
-    else if (AppVersionQuad[0] == 5) {
-        packetTypes = (short*)packetTypesGen5;
-        payloadLengths = (short*)payloadLengthsGen5;
-        preconstructedPayloads = (char**)preconstructedPayloadsGen5;
-        supportsIdrFrameRequest = false;
-    }
-    else {
-        if (encryptedControlStream) {
-            packetTypes = (short*)packetTypesGen7Enc;
-            payloadLengths = (short*)payloadLengthsGen7Enc;
-            preconstructedPayloads = (char**)preconstructedPayloadsGen7Enc;
-            supportsIdrFrameRequest = true;
-        }
-        else {
-            packetTypes = (short*)packetTypesGen7;
-            payloadLengths = (short*)payloadLengthsGen7;
-            preconstructedPayloads = (char**)preconstructedPayloadsGen7;
-            supportsIdrFrameRequest = false;
-        }
-    }
+    packetTypes = (short*)packetTypesGen7Enc;
+    payloadLengths = (short*)payloadLengthsGen7Enc;
+    preconstructedPayloads = (char**)preconstructedPayloadsGen7Enc;
+    supportsIdrFrameRequest = true;
 
     lastGoodFrame = 0;
     lastSeenFrame = 0;
@@ -351,7 +213,6 @@ int initializeControlStream(void) {
     lastConnectionStatusUpdate = CONN_STATUS_OKAY;
     firstFrameTimeMs = 0;
     currentEnetSequenceNumber = 0;
-    usePeriodicPing = APP_VERSION_AT_LEAST(7, 1, 415);
     encryptionCtx = PltCreateCryptoContext();
     decryptionCtx = PltCreateCryptoContext();
     hdrEnabled = false;
@@ -432,7 +293,7 @@ void connectionReceivedCompleteFrame(uint32_t frameIndex, bool frameIsLTR) {
     lastGoodFrame = frameIndex;
     intervalGoodFrameCount++;
 
-    if (frameIsLTR && IS_SUNSHINE() && isReferenceFrameInvalidationEnabled()) {
+    if (frameIsLTR && isReferenceFrameInvalidationEnabled()) {
         // Queue LTR frame ACK control message
         PQUEUED_REFERENCE_FRAME_CONTROL qfit;
         qfit = malloc(sizeof(*qfit));
@@ -454,9 +315,6 @@ void connectionReceivedCompleteFrame(uint32_t frameIndex, bool frameIsLTR) {
 
 void connectionSendFrameFecStatus(PSS_FRAME_FEC_STATUS fecStatus) {
     // This is a Sunshine protocol extension
-    if (!IS_SUNSHINE()) {
-        return;
-    }
 
     // Queue a frame FEC status message. This is best-effort only.
     PQUEUED_FRAME_FEC_STATUS queuedFecStatus = malloc(sizeof(*queuedFecStatus));
@@ -515,36 +373,6 @@ void connectionSawFrame(uint32_t frameIndex) {
 }
 
 // Reads an NV control stream packet from the TCP connection
-static PNVCTL_TCP_PACKET_HEADER readNvctlPacketTcp(void) {
-    NVCTL_TCP_PACKET_HEADER staticHeader;
-    PNVCTL_TCP_PACKET_HEADER fullPacket;
-    SOCK_RET err;
-
-    err = recv(ctlSock, (char*)&staticHeader, sizeof(staticHeader), 0);
-    if (err != sizeof(staticHeader)) {
-        return NULL;
-    }
-
-    staticHeader.type = LE16(staticHeader.type);
-    staticHeader.payloadLength = LE16(staticHeader.payloadLength);
-
-    fullPacket = (PNVCTL_TCP_PACKET_HEADER)malloc(staticHeader.payloadLength + sizeof(staticHeader));
-    if (fullPacket == NULL) {
-        return NULL;
-    }
-
-    memcpy(fullPacket, &staticHeader, sizeof(staticHeader));
-    if (staticHeader.payloadLength != 0) {
-        err = recv(ctlSock, (char*)(fullPacket + 1), staticHeader.payloadLength, 0);
-        if (err != staticHeader.payloadLength) {
-            free(fullPacket);
-            return NULL;
-        }
-    }
-
-    return fullPacket;
-}
-
 static bool encryptControlMessage(PNVCTL_ENCRYPTED_PACKET_HEADER encPacket, PNVCTL_ENET_PACKET_HEADER_V2 packet) {
     unsigned char iv[16] = { 0 };
     int ivSize;
@@ -693,12 +521,7 @@ static bool sendMessageEnet(short ptype, short paylen, const void* payload, uint
     ENetPacket* enetPacket;
     int err;
 
-    LC_ASSERT(AppVersionQuad[0] >= 5);
 
-    // Only send reliable packets to GFE
-    if (!IS_SUNSHINE()) {
-        flags = ENET_PACKET_FLAG_RELIABLE;
-    }
 
     if (encryptedControlStream) {
         PNVCTL_ENCRYPTED_PACKET_HEADER encPacket;
@@ -762,7 +585,7 @@ static bool sendMessageEnet(short ptype, short paylen, const void* payload, uint
 
     // Always use channel 0 for GFE and if the requested channel exceeds
     // the peer's supported channel count.
-    if (!IS_SUNSHINE() || channelId >= peer->channelCount) {
+    if (channelId >= peer->channelCount) {
         channelId = 0;
     }
 
@@ -818,66 +641,23 @@ static bool sendMessageEnet(short ptype, short paylen, const void* payload, uint
     return true;
 }
 
-static bool sendMessageTcp(short ptype, short paylen, const void* payload) {
-    PNVCTL_TCP_PACKET_HEADER packet;
-    SOCK_RET err;
-
-    LC_ASSERT(AppVersionQuad[0] < 5);
-
-    packet = malloc(sizeof(*packet) + paylen);
-    if (packet == NULL) {
-        return false;
-    }
-
-    packet->type = LE16(ptype);
-    packet->payloadLength = LE16(paylen);
-    memcpy(&packet[1], payload, paylen);
-
-    err = send(ctlSock, (char*) packet, sizeof(*packet) + paylen, 0);
-    free(packet);
-
-    if (err != (SOCK_RET)(sizeof(*packet) + paylen)) {
-        return false;
-    }
-
-    return true;
-}
-
 static bool sendMessageAndForget(short ptype, short paylen, const void* payload, uint8_t channelId, uint32_t flags, bool moreData) {
     bool ret;
 
     // Unlike regular sockets, ENet sockets aren't safe to invoke from multiple
     // threads at once. We have to synchronize them with a lock.
-    if (AppVersionQuad[0] >= 5) {
+    {
         ret = sendMessageEnet(ptype, paylen, payload, channelId, flags, moreData);
-    }
-    else {
-        ret = sendMessageTcp(ptype, paylen, payload);
     }
 
     return ret;
 }
 
 static bool sendMessageAndDiscardReply(short ptype, short paylen, const void* payload, uint8_t channelId, uint32_t flags, bool moreData) {
-    if (AppVersionQuad[0] >= 5) {
+    {
         if (!sendMessageEnet(ptype, paylen, payload, channelId, flags, moreData)) {
             return false;
         }
-    }
-    else {
-        PNVCTL_TCP_PACKET_HEADER reply;
-
-        if (!sendMessageTcp(ptype, paylen, payload)) {
-            return false;
-        }
-
-        // Discard the response
-        reply = readNvctlPacketTcp();
-        if (reply == NULL) {
-            return false;
-        }
-
-        free(reply);
     }
 
     return true;
@@ -1105,9 +885,6 @@ static void controlReceiveThreadFunc(void* context) {
     int err;
 
     // This is only used for ENet
-    if (AppVersionQuad[0] < 5) {
-        return;
-    }
 
     while (!PltIsThreadInterrupted(&controlReceiveThread)) {
         ENetEvent event;
@@ -1271,7 +1048,7 @@ static void controlReceiveThreadFunc(void* context) {
                 BbInitializeWrappedBuffer(&bb, (char*)ctlHdr, sizeof(*ctlHdr), packetLength - sizeof(*ctlHdr), BYTE_ORDER_LITTLE);
 
                 BbGet8(&bb, &enableByte);
-                if (IS_SUNSHINE()) {
+                {
                     // Zero the metadata buffer to properly handle older servers if we have to add new fields
                     memset(&hdrMetadata, 0, sizeof(hdrMetadata));
 
@@ -1388,7 +1165,7 @@ static void controlReceiveThreadFunc(void* context) {
 static void lossStatsThreadFunc(void* context) {
     BYTE_BUFFER byteBuffer;
 
-    if (usePeriodicPing) {
+    {
         char periodicPingPayload[8];
 
         BbInitializeWrappedBuffer(&byteBuffer, periodicPingPayload, 0, sizeof(periodicPingPayload), BYTE_ORDER_LITTLE);
@@ -1397,7 +1174,7 @@ static void lossStatsThreadFunc(void* context) {
 
         while (!PltIsThreadInterrupted(&lossStatsThread)) {
             // For Sunshine servers, send the more detailed per-frame FEC messages
-            if (IS_SUNSHINE()) {
+            {
                 PQUEUED_FRAME_FEC_STATUS queuedFrameStatus;
 
                 // Sunshine should always use ENet for control messages
@@ -1441,49 +1218,6 @@ static void lossStatsThreadFunc(void* context) {
             // Wait a bit
             PltSleepMsInterruptible(&lossStatsThread, PERIODIC_PING_INTERVAL_MS);
         }
-    }
-    else {
-        char* lossStatsPayload;
-
-        // Sunshine should use the newer codepath above
-        LC_ASSERT(!IS_SUNSHINE());
-
-        lossStatsPayload = malloc(payloadLengths[IDX_LOSS_STATS]);
-        if (lossStatsPayload == NULL) {
-            Limelog("Loss Stats: malloc() failed\n");
-            ListenerCallbacks.connectionTerminated(-1);
-            return;
-        }
-
-        while (!PltIsThreadInterrupted(&lossStatsThread)) {
-            // Construct the payload
-            BbInitializeWrappedBuffer(&byteBuffer, lossStatsPayload, 0, payloadLengths[IDX_LOSS_STATS], BYTE_ORDER_LITTLE);
-            BbPut32(&byteBuffer, 0);
-            BbPut32(&byteBuffer, LOSS_REPORT_INTERVAL_MS);
-            BbPut32(&byteBuffer, 1000);
-            BbPut64(&byteBuffer, lastGoodFrame);
-            BbPut32(&byteBuffer, 0);
-            BbPut32(&byteBuffer, 0);
-            BbPut32(&byteBuffer, 0x14);
-
-            // Send the message (and don't expect a response)
-            if (!sendMessageAndForget(packetTypes[IDX_LOSS_STATS],
-                                      payloadLengths[IDX_LOSS_STATS],
-                                      lossStatsPayload,
-                                      CTRL_CHANNEL_GENERIC,
-                                      0,
-                                      false)) {
-                free(lossStatsPayload);
-                Limelog("Loss Stats: Transaction failed: %d\n", (int)LastSocketError());
-                ListenerCallbacks.connectionTerminated(LastSocketFail());
-                return;
-            }
-
-            // Wait a bit
-            PltSleepMsInterruptible(&lossStatsThread, LOSS_REPORT_INTERVAL_MS);
-        }
-
-        free(lossStatsPayload);
     }
 }
 
@@ -1691,7 +1425,6 @@ int stopControlStream(void) {
 
 // Called by the input stream to send a packet for Gen 5+ servers
 int sendInputPacketOnControlStream(unsigned char* data, int length, uint8_t channelId, uint32_t flags, bool moreData) {
-    LC_ASSERT(AppVersionQuad[0] >= 5);
 
     // Send the input data (no reply expected)
     if (sendMessageAndForget(packetTypes[IDX_INPUT_DATA], length, data, channelId, flags, moreData) == 0) {
@@ -1703,7 +1436,7 @@ int sendInputPacketOnControlStream(unsigned char* data, int length, uint8_t chan
 
 // Called by the input stream to flush queued packets before a batching wait
 void flushInputOnControlStream(void) {
-    if (AppVersionQuad[0] >= 5) {
+    {
         PltLockMutex(&enetMutex);
         enet_host_flush(client);
         PltUnlockMutex(&enetMutex);
@@ -1750,7 +1483,7 @@ bool LiGetEstimatedRttInfo(uint32_t* estimatedRtt, uint32_t* estimatedRttVarianc
 int startControlStream(void) {
     int err;
 
-    if (AppVersionQuad[0] >= 5) {
+    {
         ENetAddress remoteAddress, localAddress;
         ENetEvent event;
 
@@ -1836,18 +1569,6 @@ int startControlStream(void) {
         // Set the peer timeout to 10 seconds and limit backoff to 2x RTT
         enet_peer_timeout(peer, 2, 10000, 10000);
 #endif
-    }
-    else {
-        // NB: Do NOT use ControlPortNumber here. 47995 is correct for these old versions.
-        LC_ASSERT(ControlPortNumber == 0);
-        ctlSock = connectTcpSocket(&RemoteAddr, AddrLen,
-            47995, CONTROL_STREAM_TIMEOUT_SEC);
-        if (ctlSock == INVALID_SOCKET) {
-            stopping = true;
-            return LastSocketFail();
-        }
-
-        enableNoDelay(ctlSock);
     }
 
     err = PltCreateThread("ControlRecv", controlReceiveThreadFunc, NULL, &controlReceiveThread);
@@ -2077,7 +1798,7 @@ bool LiGetCurrentHostDisplayHdrMode(void) {
 }
 
 bool LiGetHdrMetadata(PSS_HDR_METADATA metadata) {
-    if (!IS_SUNSHINE() || !hdrEnabled) {
+    if (!hdrEnabled) {
         return false;
     }
 

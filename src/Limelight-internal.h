@@ -77,12 +77,14 @@ extern uint32_t EncryptionFeaturesEnabled;
 #define isBefore24(x, y) (U24((x) - (y)) > (UINT24_MAX/2))
 #define isBefore32(x, y) (U32((x) - (y)) > (UINT32_MAX/2))
 
-#define APP_VERSION_AT_LEAST(a, b, c)                                                       \
-    ((AppVersionQuad[0] > (a)) ||                                                           \
-     (AppVersionQuad[0] == (a) && AppVersionQuad[1] > (b)) ||                               \
-     (AppVersionQuad[0] == (a) && AppVersionQuad[1] == (b) && AppVersionQuad[2] >= (c)))
-
-#define IS_SUNSHINE() (AppVersionQuad[3] < 0)
+// This fork speaks only the Sunshine dialect of the protocol: every GFE
+// compatibility path has been removed and the corresponding behavior is now
+// assumed unconditionally. Refuse to talk to a host older than this.
+// Sunshine reports "7.1.431.-1"; the negative fourth component is how it
+// distinguishes itself from GeForce Experience.
+#define REQUIRED_HOST_VERSION_MAJOR 7
+#define REQUIRED_HOST_VERSION_MINOR 1
+#define REQUIRED_HOST_VERSION_BUILD 431
 
 // Client feature flags for x-ml-general.featureFlags SDP attribute
 #define ML_FF_FEC_STATUS 0x01 // Client sends SS_FRAME_FEC_STATUS for frame losses

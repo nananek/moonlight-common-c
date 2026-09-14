@@ -22,7 +22,7 @@ void RtpvInitializeQueue(PRTP_VIDEO_QUEUE queue) {
     memset(queue, 0, sizeof(*queue));
 
     queue->currentFrameNumber = 1;
-    queue->multiFecCapable = APP_VERSION_AT_LEAST(7, 1, 431);
+    queue->multiFecCapable = true;
 }
 
 static void purgeListEntries(PRTPV_QUEUE_LIST list) {
@@ -242,20 +242,13 @@ static int reconstructFrame(PRTP_VIDEO_QUEUE queue) {
 
 #ifdef FEC_VALIDATION_MODE
     // If FEC is disabled or unsupported for this frame, we must bail early here.
-    if ((queue->fecPercentage == 0 || AppVersionQuad[0] < 5) &&
+    if (queue->fecPercentage == 0 &&
             queue->receivedDataPackets == queue->bufferDataPackets) {
 #else
     if (queue->receivedDataPackets == queue->bufferDataPackets) {
 #endif
         // We've received a full frame with no need for FEC.
         return 0;
-    }
-
-    if (AppVersionQuad[0] < 5) {
-        // Our FEC recovery code doesn't work properly until Gen 5
-        Limelog("FEC recovery not supported on Gen %d servers\n",
-                AppVersionQuad[0]);
-        return -1;
     }
 
     reed_solomon* rs = NULL;

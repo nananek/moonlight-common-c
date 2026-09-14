@@ -240,6 +240,22 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
         goto Cleanup;
     }
 
+    // All GFE compatibility paths are gone, so a host that predates the
+    // behavior we now assume unconditionally cannot be streamed from.
+    if (AppVersionQuad[3] >= 0 ||
+        AppVersionQuad[0] < REQUIRED_HOST_VERSION_MAJOR ||
+        (AppVersionQuad[0] == REQUIRED_HOST_VERSION_MAJOR &&
+         (AppVersionQuad[1] < REQUIRED_HOST_VERSION_MINOR ||
+          (AppVersionQuad[1] == REQUIRED_HOST_VERSION_MINOR &&
+           AppVersionQuad[2] < REQUIRED_HOST_VERSION_BUILD)))) {
+        Limelog("Unsupported host version: %s (requires Sunshine %d.%d.%d or later)\n",
+                serverInfo->serverInfoAppVersion,
+                REQUIRED_HOST_VERSION_MAJOR, REQUIRED_HOST_VERSION_MINOR,
+                REQUIRED_HOST_VERSION_BUILD);
+        err = -1;
+        goto Cleanup;
+    }
+
     // Replace missing callbacks with placeholders
     fixupMissingCallbacks(&drCallbacks, &arCallbacks, &clCallbacks);
     memcpy(&VideoCallbacks, drCallbacks, sizeof(VideoCallbacks));
@@ -316,17 +332,6 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     // Dimensions over 8192 aren't supported at all (even on Turing)
     else if (StreamConfig.width > 8192 || StreamConfig.height > 8192) {
         Limelog("WARNING: Streaming at resolutions above 8K will likely fail! Trying anyway!\n");
-    }
-
-    // Reference frame invalidation doesn't seem to work with resolutions much
-    // higher than 1440p. I haven't figured out a pattern to indicate which
-    // resolutions will work and which won't, but we can at least exclude
-    // 4K from RFI to avoid significant persistent artifacts after frame loss.
-    if (StreamConfig.width == 3840 && StreamConfig.height == 2160 &&
-            (VideoCallbacks.capabilities & CAPABILITY_REFERENCE_FRAME_INVALIDATION_AVC) &&
-            !IS_SUNSHINE()) {
-        Limelog("Disabling reference frame invalidation for 4K streaming with GFE\n");
-        VideoCallbacks.capabilities &= ~CAPABILITY_REFERENCE_FRAME_INVALIDATION_AVC;
     }
     
     Limelog("Initializing platform...");
