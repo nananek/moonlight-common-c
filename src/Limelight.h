@@ -41,6 +41,9 @@ extern "C" {
 // should not be freed by the caller.
 const char* LiGetLaunchUrlQueryParameters(void);
 
+// Maximum number of simultaneous video streams (one per host display).
+#define MAX_VIDEO_STREAMS 4
+
 typedef struct _STREAM_CONFIGURATION {
     // Dimensions in pixels of the desired video stream
     int width;

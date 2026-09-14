@@ -6,6 +6,8 @@
 // All depacketizer state for a single video stream. Multi-display streaming runs
 // one of these per stream, so nothing here may be file-scope state.
 typedef struct _VIDEO_DEPACKETIZER {
+    int streamIndex;
+
     PLENTRY nalChainHead;
     PLENTRY nalChainTail;
     int nalChainDataLength;
@@ -36,8 +38,12 @@ typedef struct _VIDEO_DEPACKETIZER {
 
 #define CONSECUTIVE_DROP_LIMIT 120
 
-// Until the public API carries a stream index, every entry point resolves to this one.
-static VIDEO_DEPACKETIZER TheDepacketizer;
+static VIDEO_DEPACKETIZER VideoDepacketizers[MAX_VIDEO_STREAMS];
+
+static PVIDEO_DEPACKETIZER depacketizerForStream(int streamIndex) {
+    LC_ASSERT(streamIndex >= 0 && streamIndex < MAX_VIDEO_STREAMS);
+    return &VideoDepacketizers[streamIndex];
+}
 
 typedef struct _BUFFER_DESC {
     char* data;
@@ -66,8 +72,10 @@ typedef struct _LENTRY_INTERNAL {
 #define HEVC_NAL_TYPE_SEI 39
 
 // Init
-void initializeVideoDepacketizer(int pktSize) {
-    PVIDEO_DEPACKETIZER ctx = &TheDepacketizer;
+void initializeVideoDepacketizer(int streamIndex, int pktSize) {
+    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(streamIndex);
+
+    ctx->streamIndex = streamIndex;
     LbqInitializeLinkedBlockingQueue(&ctx->decodeUnitQueue, 15);
 
     ctx->nextFrameNumber = 1;
@@ -153,14 +161,14 @@ static void freeDecodeUnitList(PLINKED_BLOCKING_QUEUE_ENTRY entry) {
     }
 }
 
-void stopVideoDepacketizer(void) {
-    PVIDEO_DEPACKETIZER ctx = &TheDepacketizer;
+void stopVideoDepacketizer(int streamIndex) {
+    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(streamIndex);
     LbqSignalQueueShutdown(&ctx->decodeUnitQueue);
 }
 
 // Cleanup video depacketizer and free malloced memory
-void destroyVideoDepacketizer(void) {
-    PVIDEO_DEPACKETIZER ctx = &TheDepacketizer;
+void destroyVideoDepacketizer(int streamIndex) {
+    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(streamIndex);
     freeDecodeUnitList(LbqDestroyLinkedBlockingQueue(&ctx->decodeUnitQueue));
     cleanupFrameState(ctx);
 }
@@ -245,7 +253,8 @@ void validateDecodeUnitForPlayback(PDECODE_UNIT decodeUnit) {
 }
 
 bool LiWaitForNextVideoFrame(VIDEO_FRAME_HANDLE* frameHandle, PDECODE_UNIT* decodeUnit) {
-    PVIDEO_DEPACKETIZER ctx = &TheDepacketizer;
+    // TODO(multi-display): this public entry point needs a stream index of its own
+    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(0);
     PQUEUED_DECODE_UNIT qdu;
 
     int err = LbqWaitForQueueElement(&ctx->decodeUnitQueue, (void**)&qdu);
@@ -261,7 +270,8 @@ bool LiWaitForNextVideoFrame(VIDEO_FRAME_HANDLE* frameHandle, PDECODE_UNIT* deco
 }
 
 bool LiPollNextVideoFrame(VIDEO_FRAME_HANDLE* frameHandle, PDECODE_UNIT* decodeUnit) {
-    PVIDEO_DEPACKETIZER ctx = &TheDepacketizer;
+    // TODO(multi-display): this public entry point needs a stream index of its own
+    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(0);
     PQUEUED_DECODE_UNIT qdu;
 
     int err = LbqPollQueueElement(&ctx->decodeUnitQueue, (void**)&qdu);
@@ -277,7 +287,8 @@ bool LiPollNextVideoFrame(VIDEO_FRAME_HANDLE* frameHandle, PDECODE_UNIT* decodeU
 }
 
 bool LiPeekNextVideoFrame(PDECODE_UNIT* decodeUnit) {
-    PVIDEO_DEPACKETIZER ctx = &TheDepacketizer;
+    // TODO(multi-display): this public entry point needs a stream index of its own
+    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(0);
     PQUEUED_DECODE_UNIT qdu;
 
     int err = LbqPeekQueueElement(&ctx->decodeUnitQueue, (void**)&qdu);
@@ -292,19 +303,21 @@ bool LiPeekNextVideoFrame(PDECODE_UNIT* decodeUnit) {
 }
 
 void LiWakeWaitForVideoFrame(void) {
-    PVIDEO_DEPACKETIZER ctx = &TheDepacketizer;
+    // TODO(multi-display): this public entry point needs a stream index of its own
+    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(0);
     LbqSignalQueueUserWake(&ctx->decodeUnitQueue);
 }
 
 // Cleanup a decode unit by freeing the buffer chain and the holder
 void LiCompleteVideoFrame(VIDEO_FRAME_HANDLE handle, int drStatus) {
-    PVIDEO_DEPACKETIZER ctx = &TheDepacketizer;
+    // TODO(multi-display): this public entry point needs a stream index of its own
+    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(0);
     PQUEUED_DECODE_UNIT qdu = handle;
     PLENTRY_INTERNAL lastEntry;
 
     if (drStatus == DR_NEED_IDR) {
         Limelog("Requesting IDR frame on behalf of DR\n");
-        requestDecoderRefresh();
+        requestDecoderRefresh(ctx->streamIndex);
     }
     else if (drStatus == DR_OK && qdu->decodeUnit.frameType == FRAME_TYPE_IDR) {
         // Remember that the IDR frame was processed. We can now use
@@ -730,8 +743,8 @@ static void processAvcHevcRtpPayloadSlow(PVIDEO_DEPACKETIZER ctx, PBUFFER_DESC c
 
 // Dumps the decode unit queue and ensures the next frame submitted to the decoder will be
 // an IDR frame
-void requestDecoderRefresh(void) {
-    PVIDEO_DEPACKETIZER ctx = &TheDepacketizer;
+void requestDecoderRefresh(int streamIndex) {
+    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(streamIndex);
     // Wait for the next IDR frame
     ctx->waitingForIdrFrame = true;
 
@@ -1104,8 +1117,8 @@ static void processRtpPayload(PVIDEO_DEPACKETIZER ctx, PNV_VIDEO_PACKET videoPac
 // if it determines the frame to be unrecoverable. This lets us
 // avoid having to wait until the next received frame to determine
 // that we lost a frame and submit an RFI request.
-void notifyFrameLost(unsigned int frameNumber, bool speculative) {
-    PVIDEO_DEPACKETIZER ctx = &TheDepacketizer;
+void notifyFrameLost(int streamIndex, unsigned int frameNumber, bool speculative) {
+    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(streamIndex);
     // We may not invalidate frames that we've already received
     LC_ASSERT(frameNumber >= ctx->startFrameNumber);
 
@@ -1132,8 +1145,8 @@ void notifyFrameLost(unsigned int frameNumber, bool speculative) {
 }
 
 // Add an RTP Packet to the queue
-void queueRtpPacket(PRTPV_QUEUE_ENTRY queueEntryPtr) {
-    PVIDEO_DEPACKETIZER ctx = &TheDepacketizer;
+void queueRtpPacket(int streamIndex, PRTPV_QUEUE_ENTRY queueEntryPtr) {
+    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(streamIndex);
     int dataOffset;
     RTPV_QUEUE_ENTRY queueEntry = *queueEntryPtr;
 
@@ -1169,6 +1182,7 @@ void queueRtpPacket(PRTPV_QUEUE_ENTRY queueEntryPtr) {
 }
 
 int LiGetPendingVideoFrames(void) {
-    PVIDEO_DEPACKETIZER ctx = &TheDepacketizer;
+    // TODO(multi-display): this public entry point needs a stream index of its own
+    PVIDEO_DEPACKETIZER ctx = depacketizerForStream(0);
     return LbqGetItemCount(&ctx->decodeUnitQueue);
 }

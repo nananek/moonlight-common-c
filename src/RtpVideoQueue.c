@@ -17,9 +17,11 @@
 // RTP packets use a 90 KHz presentation timestamp clock
 #define PTS_DIVISOR 90
 
-void RtpvInitializeQueue(PRTP_VIDEO_QUEUE queue) {
+void RtpvInitializeQueue(PRTP_VIDEO_QUEUE queue, int streamIndex) {
     reed_solomon_init();
     memset(queue, 0, sizeof(*queue));
+
+    queue->streamIndex = streamIndex;
 
     queue->currentFrameNumber = 1;
     queue->multiFecCapable = true;
@@ -216,7 +218,7 @@ static int reconstructFrame(PRTP_VIDEO_QUEUE queue) {
             // NB: We use totalPackets - neededPackets instead of just bufferParityPackets here because we require
             // one extra parity shard for recovery if we're in FEC validation mode.
             if (queue->missingPackets > totalPackets - neededPackets) {
-                notifyFrameLost(queue->currentFrameNumber, true);
+                notifyFrameLost(queue->streamIndex, queue->currentFrameNumber, true);
                 queue->reportedLostFrame = true;
             }
             else {
@@ -526,7 +528,7 @@ static void submitCompletedFrame(PRTP_VIDEO_QUEUE queue) {
 
         // Submit this packet for decoding. It will own freeing the entry now.
         removeEntryFromList(&queue->completedFecBlockList, entry);
-        queueRtpPacket(entry);
+        queueRtpPacket(queue->streamIndex, entry);
     }
 }
 
@@ -609,7 +611,7 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
 
                     // Notify the host of the loss of this frame
                     if (!queue->reportedLostFrame) {
-                        notifyFrameLost(queue->currentFrameNumber, false);
+                        notifyFrameLost(queue->streamIndex, queue->currentFrameNumber, false);
                     }
 
                     // NB: We reset reportedLostFrame here because we don't want to suppress
@@ -647,7 +649,7 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
 
             // Notify the host of the loss of this frame
             if (!queue->reportedLostFrame) {
-                notifyFrameLost(nvPacket->frameIndex, false);
+                notifyFrameLost(queue->streamIndex, nvPacket->frameIndex, false);
             }
 
             // We dropped a block of this frame, so we must skip to the next one.
@@ -680,7 +682,7 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
                 // NB: We only have to notify for the most recent lost frame, since
                 // the depacketizer will report the RFI range starting at the last
                 // frame it saw.
-                notifyFrameLost(nvPacket->frameIndex - 1, false);
+                notifyFrameLost(queue->streamIndex, nvPacket->frameIndex - 1, false);
             }
         }
 
